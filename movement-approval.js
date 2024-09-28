@@ -77,15 +77,32 @@ const MovementApproval = {
 	},
 
 	/**
+	 * Handle socket events for pending requests.
+	 * @param {string} tokenId - The ID of the token.
+	 * @param {Object|null} request - The request data or null to remove.
+	 */
+	handlePendingRequest(tokenId, request) {
+		if (request === null) {
+			if (this._pendingRequests[tokenId]?.dialog) {
+				this._pendingRequests[tokenId].dialog.close();
+			}
+			delete this._pendingRequests[tokenId];
+		} else {
+			this._pendingRequests[tokenId] = request;
+		}
+
+		if (game.user.isGM) {
+			this.emitSocket("updatePendingRequests", { [tokenId]: request });
+		}
+	},
+
+	/**
 	 * Set a pending request for a token.
 	 * @param {string} tokenId - The ID of the token.
 	 * @param {Object} request - The request data.
 	 */
 	setPendingRequest(tokenId, request) {
-		this._pendingRequests[tokenId] = request;
-		if (game.user.isGM) {
-			this.emitSocket("updatePendingRequests", { [tokenId]: request });
-		}
+		this.handlePendingRequest(tokenId, request);
 	},
 
 	/**
@@ -93,13 +110,7 @@ const MovementApproval = {
 	 * @param {string} tokenId - The ID of the token.
 	 */
 	removePendingRequest(tokenId) {
-		if (this._pendingRequests[tokenId]?.dialog) {
-			this._pendingRequests[tokenId].dialog.close();
-		}
-		delete this._pendingRequests[tokenId];
-		if (game.user.isGM) {
-			this.emitSocket("updatePendingRequests", { [tokenId]: null });
-		}
+		this.handlePendingRequest(tokenId, null);
 	},
 
 	/**
@@ -125,6 +136,7 @@ const MovementApproval = {
 
 			const pathData = {
 				tokenId: token.id,
+				rulerName: this.name,
 				sceneId: token.scene.id,
 				waypoints: this.waypoints,
 				destination: this.destination,
@@ -461,12 +473,14 @@ const MovementApproval = {
 		if (tokenId) {
 			const request = this._pendingRequests[tokenId];
 			if (request) {
+				const userId = game.user.id;
 				const { sceneId } = request;
 				const scene = game.scenes.get(sceneId);
 				const token = scene.tokens.get(tokenId);
 				this.clearStaticPath(tokenId);
 				this.removePendingRequest(tokenId);
 				this.emitSocket("cancelMovementRequest", {
+					userId,
 					tokenId,
 					sceneId,
 					tokenName: token.name,
@@ -497,6 +511,7 @@ const MovementApproval = {
 	 */
 	handleCancelMovementRequest(data) {
 		this.clearStaticPath(data.tokenId);
+		this.clearRuler(data);
 		this.removePendingRequest(data.tokenId);
 
 		const dialogToClose = Object.values(ui.windows).find(
@@ -526,11 +541,7 @@ const MovementApproval = {
 	 */
 	handleUpdatePendingRequests(updates) {
 		for (const [tokenId, request] of Object.entries(updates)) {
-			if (request === null) {
-				delete this._pendingRequests[tokenId];
-			} else {
-				this._pendingRequests[tokenId] = request;
-			}
+			this.handlePendingRequest(tokenId, request);
 		}
 		this.updatePendingRequestIcon();
 	},
@@ -543,6 +554,18 @@ const MovementApproval = {
 			(request) => request.userId === game.user.id,
 		);
 		this.togglePendingRequestIcon(hasPendingRequest);
+	},
+
+	/**
+	 * Clear specific ruler from the canvas that belongs to the data.
+	 * @param {Object} data - The data for the ruler to clear.
+	 */
+	clearRuler(data) {
+		console.log("should clear ruler", data);
+		const ruler = canvas.controls.rulers.children.find(
+			(ruler) => ruler.name === `Ruler.${data.userId}`,
+		);
+		if (ruler) ruler.clear();
 	},
 
 	/**
@@ -561,59 +584,48 @@ const MovementApproval = {
 	 */
 	handleClientDisconnection(roleId, userId) {
 		console.log("client disconnected", roleId, userId);
-		// Dm disconnected!
-		if (roleId === 4) {
-			// cleanup self
-			console.log("pending: ", this._pendingRequests);
-			console.log("paths: ", this._staticPaths);
 
-			const tokenIdsToCancel = Object.entries(this._pendingRequests).map(
-				([tokenId, _]) => tokenId,
-			);
-
-			console.log("tokens to cancel: ", tokenIdsToCancel);
-			for (const tokenId of tokenIdsToCancel) {
+		const cleanupRequests = (tokenIds) => {
+			for (const tokenId of tokenIds) {
 				const request = this._pendingRequests[tokenId];
 				const scene = game.scenes.get(request.sceneId);
 				const token = scene.tokens.get(tokenId);
 
 				this.clearStaticPath(tokenId);
 				this.removePendingRequest(tokenId);
-			}
-		}
 
-		if (roleId !== 4 && game.user.isGM) {
-			console.log("should act as dm");
+				if (game.user.isGM) {
+					ui.notifications.info(
+						game.i18n.format(
+							`${LANGUAGE_PREFIX}.notifications.requestCancelledByDisconnect`,
+							{ tokenName: token.name },
+						),
+					);
+
+					// Close any open dialogs for this request
+					const dialogToClose = Object.values(ui.windows).find(
+						(w) =>
+							w instanceof Dialog &&
+							w.data.type === `${MODULE_ID}-dialog` &&
+							w.data.tokenId === tokenId,
+					);
+					if (dialogToClose) {
+						dialogToClose.close();
+					}
+				}
+			}
+		};
+
+		if (roleId === 4) {
+			// DM disconnected
+			const tokenIdsToCancel = Object.keys(this._pendingRequests);
+			cleanupRequests(tokenIdsToCancel);
+		} else if (game.user.isGM) {
+			// Player disconnected
 			const tokenIdsToCancel = Object.entries(this._pendingRequests)
 				.filter(([_, request]) => request.userId === userId)
 				.map(([tokenId, _]) => tokenId);
-
-			for (const tokenId of tokenIdsToCancel) {
-				const request = this._pendingRequests[tokenId];
-				const scene = game.scenes.get(request.sceneId);
-				const token = scene.tokens.get(tokenId);
-
-				this.clearStaticPath(tokenId);
-				this.removePendingRequest(tokenId);
-
-				ui.notifications.info(
-					game.i18n.format(
-						`${LANGUAGE_PREFIX}.notifications.requestCancelledByDisconnect`,
-						{ tokenName: token.name },
-					),
-				);
-
-				// Close any open dialogs for this request
-				const dialogToClose = Object.values(ui.windows).find(
-					(w) =>
-						w instanceof Dialog &&
-						w.data.type === `${MODULE_ID}-dialog` &&
-						w.data.tokenId === tokenId,
-				);
-				if (dialogToClose) {
-					dialogToClose.close();
-				}
-			}
+			cleanupRequests(tokenIdsToCancel);
 		}
 	},
 };

@@ -1,0 +1,22 @@
+{
+    "movementApproval": {
+        "controls": {
+            "lockMovement": {
+                "name": "Lock Movement"
+            }
+        },
+        "notifications": {
+            "pendingRequest": "You already have a pending movement request. Please wait for GM approval.",
+            "requestSent": "Movement request sent to GM for approval.",
+            "movementApproved": "Your movement has been approved.",
+            "movementDenied": "Movement denied.",
+            "movementLocked": "Movement is currently locked. Use the ruler to request movement."
+        },
+        "dialog": {
+            "title": "Movement Approval",
+            "content": "{tokenName} requests to move. Do you approve?",
+            "approve": "Approve",
+            "deny": "Deny"
+        }
+    }
+}

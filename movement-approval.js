@@ -6,7 +6,7 @@ const ICON_STATES = {
 	DISABLED: "fa-person-walking",
 };
 
-const PENDING_REQUEST_ICON = "fa-hourglass-half";
+const PENDING_REQUEST_ICON = "fa-person-walking-dashed-line-arrow-right";
 const PENDING_REQUEST_TOOL_NAME = "pendingMovementRequest";
 
 const MovementApproval = {
@@ -146,20 +146,24 @@ const MovementApproval = {
 	 * Patch Token dragging methods to prevent movement when the module is enabled.
 	 */
 	patchTokenDragging() {
-		const checkMovementLock = function (event) {
+		const originalOnDragLeftStart = Token.prototype._onDragLeftStart;
+		const originalOnDragLeftMove = Token.prototype._onDragLeftMove;
+
+		Token.prototype._onDragLeftStart = function (event) {
 			if (!game.user.isGM && MovementApproval.getEnabled()) {
 				MovementApproval.showMovementLockedWarning();
 				return false;
 			}
-			return this.call(this, event);
+			return originalOnDragLeftStart.call(this, event);
 		};
 
-		Token.prototype._onDragLeftStart = checkMovementLock.bind(
-			Token.prototype._onDragLeftStart,
-		);
-		Token.prototype._onDragLeftMove = checkMovementLock.bind(
-			Token.prototype._onDragLeftMove,
-		);
+		Token.prototype._onDragLeftMove = function (event) {
+			if (!game.user.isGM && MovementApproval.getEnabled()) {
+				MovementApproval.showMovementLockedWarning();
+				return false;
+			}
+			return originalOnDragLeftMove.call(this, event);
+		};
 	},
 
 	/**
@@ -212,6 +216,7 @@ const MovementApproval = {
 			}),
 			type: `${MODULE_ID}-dialog`,
 			tokenId: data.tokenId,
+			userId: data.userId,
 			buttons: {
 				approve: {
 					icon: '<i class="fas fa-check"></i>',
@@ -544,6 +549,47 @@ const MovementApproval = {
 			ruler.clear();
 		}
 	},
+
+	/**
+	 * Handle a client disconnection.
+	 * @param {string} userId - The ID of the disconnected user.
+	 */
+	handleClientDisconnection(userId) {
+		console.log("client disconnected", userId);
+		if (game.user.isGM) {
+			console.log("should act as dm");
+			const tokenIdsToCancel = Object.entries(this._pendingRequests)
+				.filter(([_, request]) => request.userId === userId)
+				.map(([tokenId, _]) => tokenId);
+
+			for (const tokenId of tokenIdsToCancel) {
+				const request = this._pendingRequests[tokenId];
+				const scene = game.scenes.get(request.sceneId);
+				const token = scene.tokens.get(tokenId);
+
+				this.clearStaticPath(tokenId);
+				this.removePendingRequest(tokenId);
+
+				ui.notifications.info(
+					game.i18n.format(
+						`${LANGUAGE_PREFIX}.notifications.requestCancelledByDisconnect`,
+						{ tokenName: token.name },
+					),
+				);
+
+				// Close any open dialogs for this request
+				const dialogToClose = Object.values(ui.windows).find(
+					(w) =>
+						w instanceof Dialog &&
+						w.data.type === `${MODULE_ID}-dialog` &&
+						w.data.tokenId === tokenId,
+				);
+				if (dialogToClose) {
+					dialogToClose.close();
+				}
+			}
+		}
+	},
 };
 
 Hooks.once("init", () => {
@@ -552,6 +598,12 @@ Hooks.once("init", () => {
 
 Hooks.once("setup", () => {
 	MovementApproval.registerSettings();
+});
+
+Hooks.on("userConnected", (info) => {
+	if (!info.active) {
+		MovementApproval.handleClientDisconnection(info._source._id);
+	}
 });
 
 Hooks.on("getSceneControlButtons", (controls) => {

@@ -26,6 +26,7 @@
 	],
 	"url": "https://github.com/smeevil/foundryvtt-movement-approval",
 	"manifest": "https://github.com/smeevil/foundryvtt-movement-approval/releases/latest/download/module.json",
-	"license": "https://github.com/smeevil/foundryvtt-movement-approval/releases/latests/download/LICENSE",
+	"download": "https://github.com/smeevil/foundryvtt-movement-approval/releases/latest/download/module.zip",
+	"license": "https://github.com/smeevil/foundryvtt-movement-approval/releases/latest/download/LICENSE",
 	"bugs": "https://github.com/smeevil/foundryvtt-movement-approval/issues"
 }

@@ -74,21 +74,27 @@ const MovementApproval = {
 				return false;
 			}
 
+			const pathData = {
+				tokenId: token.id,
+				sceneId: token.scene.id,
+				waypoints: this.waypoints,
+				destination: this.destination,
+				color: this.color, // Add the ruler's color to the pathData
+			};
+
 			game.socket.emit(`module.${MovementApproval.ID}`, {
 				type: "requestMovement",
-				payload: {
-					tokenId: token.id,
-					sceneId: token.scene.id,
-					rulerName: this.name,
-					waypoints: this.waypoints,
-					destination: this.destination,
-				},
+				payload: pathData,
 			});
 
 			ui.notifications.info(
 				game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.requestSent`),
 			);
+
 			this.clear();
+			MovementApproval.drawStaticPath(pathData);
+
+			return false;
 		};
 	},
 
@@ -165,21 +171,29 @@ const MovementApproval = {
 	},
 
 	approveMovement(data) {
-		this.clearRuler(data);
+		this.clearStaticPath(data.tokenId);
 		this.removePendingRequest(data.tokenId);
 		game.socket.emit(`module.${MovementApproval.ID}`, {
 			type: "movementApproved",
 			payload: data,
 		});
+		// Clear the ruler for all users
+		for (const ruler of canvas.controls.rulers.children) {
+			ruler.clear();
+		}
 	},
 
 	denyMovement(data) {
-		this.clearRuler(data);
+		this.clearStaticPath(data.tokenId);
 		this.removePendingRequest(data.tokenId);
 		game.socket.emit(`module.${MovementApproval.ID}`, {
 			type: "movementDenied",
 			payload: data,
 		});
+		// Clear the ruler for all users
+		for (const ruler of canvas.controls.rulers.children) {
+			ruler.clear();
+		}
 	},
 
 	removePendingRequest(tokenId) {
@@ -188,10 +202,15 @@ const MovementApproval = {
 		void this.setPendingRequests(pendingRequests);
 	},
 
-	async handleMovementDenied(_data) {
+	async handleMovementDenied(data) {
 		ui.notifications.warn(
 			game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.movementDenied`),
 		);
+		this.clearStaticPath(data.tokenId);
+		// Clear the ruler for all users
+		for (const ruler of canvas.controls.rulers.children) {
+			ruler.clear();
+		}
 	},
 
 	async handleMovementApproved(data) {
@@ -205,6 +224,11 @@ const MovementApproval = {
 			await this.moveTokenAlongPath(token, data.waypoints, data.destination);
 		}
 		this.removePendingRequest(data.tokenId);
+		this.clearStaticPath(data.tokenId);
+		// Clear the ruler for all users
+		for (const ruler of canvas.controls.rulers.children) {
+			ruler.clear();
+		}
 	},
 
 	async moveTokenAlongPath(token, waypoints, destination) {
@@ -218,12 +242,37 @@ const MovementApproval = {
 		await CanvasAnimation.getAnimation(token.object.animationName)?.promise;
 	},
 
-	clearRuler(data) {
-		const ruler = canvas.controls.rulers.children.find(
-			(ruler) => ruler.name === data.rulerName,
-		);
+	drawStaticPath(pathData) {
+		const { tokenId, waypoints, destination, color } = pathData;
+		const graphics = new PIXI.Graphics();
 
-		if (ruler) ruler.clear();
+		// Draw the black outline
+		graphics.lineStyle(6, 0x000000, 0.5);
+		this._drawPath(graphics, waypoints, destination);
+
+		// Draw the colored line on top
+		graphics.lineStyle(4, color, 0.7);
+		this._drawPath(graphics, waypoints, destination);
+
+		canvas.controls.addChild(graphics);
+		this._staticPaths = this._staticPaths || {};
+		this._staticPaths[tokenId] = graphics;
+	},
+
+	_drawPath(graphics, waypoints, destination) {
+		graphics.moveTo(waypoints[0].x, waypoints[0].y);
+		for (let i = 1; i < waypoints.length; i++) {
+			graphics.lineTo(waypoints[i].x, waypoints[i].y);
+		}
+		graphics.lineTo(destination.x, destination.y);
+	},
+
+	clearStaticPath(tokenId) {
+		if (this._staticPaths?.[tokenId]) {
+			canvas.controls.removeChild(this._staticPaths[tokenId]);
+			this._staticPaths[tokenId].destroy();
+			delete this._staticPaths[tokenId];
+		}
 	},
 
 	handleLockMovementToggle() {

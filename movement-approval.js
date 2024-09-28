@@ -22,6 +22,9 @@ const MovementApproval = {
 		this.patchRulerMovement();
 		this.patchTokenDragging();
 		this.registerSocketListeners();
+		setTimeout(() => {
+			this.clearAllRulers();
+		}, 1000);
 	},
 
 	/**
@@ -363,6 +366,7 @@ const MovementApproval = {
 	handleLockMovementToggle() {
 		this.setEnabled(!this.getEnabled());
 		if (!this.getEnabled()) {
+			MovementApproval.clearStaticPath(token.id);
 			this._pendingRequests = {};
 		}
 	},
@@ -552,11 +556,33 @@ const MovementApproval = {
 
 	/**
 	 * Handle a client disconnection.
+	 * @param {number} roleId - The ID of the disconnected users role.
 	 * @param {string} userId - The ID of the disconnected user.
 	 */
-	handleClientDisconnection(userId) {
-		console.log("client disconnected", userId);
-		if (game.user.isGM) {
+	handleClientDisconnection(roleId, userId) {
+		console.log("client disconnected", roleId, userId);
+		// Dm disconnected!
+		if (roleId === 4) {
+			// cleanup self
+			console.log("pending: ", this._pendingRequests);
+			console.log("paths: ", this._staticPaths);
+
+			const tokenIdsToCancel = Object.entries(this._pendingRequests).map(
+				([tokenId, _]) => tokenId,
+			);
+
+			console.log("tokens to cancel: ", tokenIdsToCancel);
+			for (const tokenId of tokenIdsToCancel) {
+				const request = this._pendingRequests[tokenId];
+				const scene = game.scenes.get(request.sceneId);
+				const token = scene.tokens.get(tokenId);
+
+				this.clearStaticPath(tokenId);
+				this.removePendingRequest(tokenId);
+			}
+		}
+
+		if (roleId !== 4 && game.user.isGM) {
 			console.log("should act as dm");
 			const tokenIdsToCancel = Object.entries(this._pendingRequests)
 				.filter(([_, request]) => request.userId === userId)
@@ -592,7 +618,7 @@ const MovementApproval = {
 	},
 };
 
-Hooks.once("init", () => {
+Hooks.once("ready", () => {
 	MovementApproval.initialize();
 });
 
@@ -602,7 +628,10 @@ Hooks.once("setup", () => {
 
 Hooks.on("userConnected", (info) => {
 	if (!info.active) {
-		MovementApproval.handleClientDisconnection(info._source._id);
+		MovementApproval.handleClientDisconnection(
+			info._source.role,
+			info._source._id,
+		);
 	}
 });
 

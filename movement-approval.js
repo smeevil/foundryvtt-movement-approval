@@ -6,12 +6,16 @@ const ICON_STATES = {
 	DISABLED: "fa-person-walking",
 };
 
+// Add these constants at the top of the file
+const PENDING_REQUEST_ICON = "fa-hourglass-half";
+const PENDING_REQUEST_TOOL_NAME = "pendingMovementRequest";
+
 const MovementApproval = {
 	ID: MODULE_ID,
 	lastWarningTime: 0,
+	_pendingRequests: {}, // New local variable to store pending requests
 
 	initialize() {
-		this.registerSettings();
 		this.patchRulerMovement();
 		this.patchTokenDragging();
 		this.registerSocketListeners();
@@ -29,36 +33,56 @@ const MovementApproval = {
 				this.updateControlsIcon(value);
 			},
 		});
-
-		game.settings.register(this.ID, "pendingRequests", {
-			name: "Pending Movement Requests",
-			scope: "world",
-			config: false,
-			type: Object,
-			default: {},
-		});
 	},
 
-	get enabled() {
-		return game.settings.get(this.ID, "enabled");
+	getEnabled() {
+		try {
+			return game.settings.get(this.ID, "enabled");
+		} catch (error) {
+			console.warn(
+				"Movement Approval: Settings not yet registered, falling back to default.",
+			);
+			return false;
+		}
 	},
 
-	set enabled(value) {
-		void game.settings.set(this.ID, "enabled", value);
+	setEnabled(value) {
+		if (game.user.isGM) {
+			game.settings.set(this.ID, "enabled", value);
+		}
 	},
 
 	getPendingRequests() {
-		return game.settings.get(this.ID, "pendingRequests");
+		return this._pendingRequests;
 	},
 
-	setPendingRequests(requests) {
-		return game.settings.set(this.ID, "pendingRequests", requests);
+	setPendingRequest(tokenId, request) {
+		this._pendingRequests[tokenId] = request;
+		if (game.user.isGM) {
+			game.socket.emit(`module.${this.ID}`, {
+				type: "updatePendingRequests",
+				payload: { [tokenId]: request },
+			});
+		}
+	},
+
+	removePendingRequest(tokenId) {
+		if (this._pendingRequests[tokenId]?.dialog) {
+			this._pendingRequests[tokenId].dialog.close();
+		}
+		delete this._pendingRequests[tokenId];
+		if (game.user.isGM) {
+			game.socket.emit(`module.${this.ID}`, {
+				type: "updatePendingRequests",
+				payload: { [tokenId]: null },
+			});
+		}
 	},
 
 	patchRulerMovement() {
 		const originalMoveToken = Ruler.prototype.moveToken;
 		Ruler.prototype.moveToken = async function () {
-			if (game.user.isGM || !MovementApproval.enabled) {
+			if (game.user.isGM || !MovementApproval.getEnabled()) {
 				return originalMoveToken.call(this);
 			}
 
@@ -80,6 +104,7 @@ const MovementApproval = {
 				waypoints: this.waypoints,
 				destination: this.destination,
 				color: this.color, // Add the ruler's color to the pathData
+				userId: game.user.id,
 			};
 
 			game.socket.emit(`module.${MovementApproval.ID}`, {
@@ -94,6 +119,8 @@ const MovementApproval = {
 			this.clear();
 			MovementApproval.drawStaticPath(pathData);
 
+			MovementApproval.showPendingRequestIcon();
+
 			return false;
 		};
 	},
@@ -103,7 +130,7 @@ const MovementApproval = {
 		const originalOnDragLeftMove = Token.prototype._onDragLeftMove;
 
 		Token.prototype._onDragLeftStart = function (event) {
-			if (!game.user.isGM && MovementApproval.enabled) {
+			if (!game.user.isGM && MovementApproval.getEnabled()) {
 				MovementApproval.showMovementLockedWarning();
 				return false;
 			}
@@ -111,7 +138,7 @@ const MovementApproval = {
 		};
 
 		Token.prototype._onDragLeftMove = function (event) {
-			if (!game.user.isGM && MovementApproval.enabled) {
+			if (!game.user.isGM && MovementApproval.getEnabled()) {
 				MovementApproval.showMovementLockedWarning();
 				return false;
 			}
@@ -138,15 +165,16 @@ const MovementApproval = {
 				void this.handleMovementApproved(data.payload);
 			} else if (data.type === "movementDenied" && !game.user.isGM) {
 				void this.handleMovementDenied(data.payload);
+			} else if (data.type === "cancelMovementRequest" && game.user.isGM) {
+				this.handleCancelMovementRequest(data.payload);
+			} else if (data.type === "updatePendingRequests" && !game.user.isGM) {
+				this.handleUpdatePendingRequests(data.payload);
 			}
 		});
 	},
 
 	handleMovementRequest(data) {
-		const pendingRequests = this.getPendingRequests();
-		pendingRequests[data.tokenId] = data;
-		void this.setPendingRequests(pendingRequests);
-
+		this.setPendingRequest(data.tokenId, data);
 		const scene = game.scenes.get(data.sceneId);
 		const token = scene.tokens.get(data.tokenId);
 
@@ -154,7 +182,10 @@ const MovementApproval = {
 			title: game.i18n.localize(`${LANGUAGE_PREFIX}.dialog.title`),
 			content: game.i18n.format(`${LANGUAGE_PREFIX}.dialog.content`, {
 				tokenName: token.name,
+				tokenId: data.tokenId,
 			}),
+			type: `${MODULE_ID}-dialog`,
+			tokenId: data.tokenId,
 			buttons: {
 				approve: {
 					icon: '<i class="fas fa-check"></i>',
@@ -196,12 +227,6 @@ const MovementApproval = {
 		}
 	},
 
-	removePendingRequest(tokenId) {
-		const pendingRequests = this.getPendingRequests();
-		delete pendingRequests[tokenId];
-		void this.setPendingRequests(pendingRequests);
-	},
-
 	async handleMovementDenied(data) {
 		ui.notifications.warn(
 			game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.movementDenied`),
@@ -211,6 +236,7 @@ const MovementApproval = {
 		for (const ruler of canvas.controls.rulers.children) {
 			ruler.clear();
 		}
+		this.hidePendingRequestIcon();
 	},
 
 	async handleMovementApproved(data) {
@@ -229,6 +255,7 @@ const MovementApproval = {
 		for (const ruler of canvas.controls.rulers.children) {
 			ruler.clear();
 		}
+		this.hidePendingRequestIcon();
 	},
 
 	async moveTokenAlongPath(token, waypoints, destination) {
@@ -276,10 +303,10 @@ const MovementApproval = {
 	},
 
 	handleLockMovementToggle() {
-		this.enabled = !this.enabled;
-		if (!this.enabled) {
+		this.setEnabled(!this.getEnabled());
+		if (!this.getEnabled()) {
 			// Clear all pending requests when disabling
-			void this.setPendingRequests({});
+			this._pendingRequests = {};
 		}
 	},
 
@@ -294,10 +321,164 @@ const MovementApproval = {
 			}
 		}
 	},
+
+	showPendingRequestIcon() {
+		const controls = ui.controls.controls.find((c) => c.name === "token");
+		if (controls) {
+			const existingTool = controls.tools.find(
+				(t) => t.name === PENDING_REQUEST_TOOL_NAME,
+			);
+			if (!existingTool) {
+				controls.tools.push({
+					name: PENDING_REQUEST_TOOL_NAME,
+					title: game.i18n.localize(
+						`${LANGUAGE_PREFIX}.controls.pendingRequest.name`,
+					),
+					icon: `fas ${PENDING_REQUEST_ICON}`,
+					button: true,
+					visible: true,
+					onClick: () => this.showCancelRequestDialog(),
+				});
+				ui.controls.render();
+			}
+		}
+	},
+
+	hidePendingRequestIcon() {
+		const controls = ui.controls.controls.find((c) => c.name === "token");
+		if (controls) {
+			const index = controls.tools.findIndex(
+				(t) => t.name === PENDING_REQUEST_TOOL_NAME,
+			);
+			if (index !== -1) {
+				controls.tools.splice(index, 1);
+				ui.controls.render();
+			}
+		}
+	},
+
+	showCancelRequestDialog() {
+		new Dialog({
+			title: game.i18n.localize(`${LANGUAGE_PREFIX}.cancelDialog.title`),
+			content: game.i18n.localize(`${LANGUAGE_PREFIX}.cancelDialog.content`),
+			buttons: {
+				cancel: {
+					icon: '<i class="fas fa-times"></i>',
+					label: game.i18n.localize(`${LANGUAGE_PREFIX}.cancelDialog.cancel`),
+					callback: () => this.cancelMovementRequest(),
+				},
+				close: {
+					icon: '<i class="fas fa-check"></i>',
+					label: game.i18n.localize(`${LANGUAGE_PREFIX}.cancelDialog.close`),
+				},
+			},
+		}).render(true);
+	},
+
+	cancelMovementRequest() {
+		const tokenId = Object.keys(this._pendingRequests).find(
+			(key) => this._pendingRequests[key].userId === game.user.id,
+		);
+
+		if (tokenId) {
+			const request = this._pendingRequests[tokenId];
+			if (request) {
+				const sceneId = request.sceneId;
+				const scene = game.scenes.get(sceneId);
+				const token = scene.tokens.get(tokenId);
+				this.clearStaticPath(tokenId);
+				this.removePendingRequest(tokenId);
+				game.socket.emit(`module.${this.ID}`, {
+					type: "cancelMovementRequest",
+					payload: { tokenId, sceneId, tokenName: token.name },
+				});
+				this.hidePendingRequestIcon();
+				ui.notifications.info(
+					game.i18n.localize(
+						`${LANGUAGE_PREFIX}.notifications.requestCancelled`,
+					),
+				);
+			} else {
+				console.warn(
+					`Movement Approval: Attempted to cancel non-existent request for token ${tokenId}`,
+				);
+				this.hidePendingRequestIcon();
+			}
+		} else {
+			console.warn(
+				"Movement Approval: No pending request found for current user",
+			);
+			this.hidePendingRequestIcon();
+		}
+	},
+
+	handleCancelMovementRequest(data) {
+		console.log("should cancel movement request", data);
+		this.clearStaticPath(data.tokenId);
+		this.removePendingRequest(data.tokenId);
+
+		// Find and close the specific dialog
+		const dialogToClose = Object.values(ui.windows).find(
+			(w) =>
+				w instanceof Dialog &&
+				w.data.type === `${MODULE_ID}-dialog` &&
+				w.data.tokenId === data.tokenId,
+		);
+
+		this.clearStaticPath(data.tokenId);
+		this.removePendingRequest(data.tokenId);
+		game.socket.emit(`module.${MovementApproval.ID}`, {
+			type: "movementDenied",
+			payload: data,
+		});
+
+		// Clear the ruler for all users
+		for (const ruler of canvas.controls.rulers.children) {
+			ruler.clear();
+		}
+		console.log("found", dialogToClose);
+		if (dialogToClose) {
+			dialogToClose.close();
+		}
+
+		ui.notifications.info(
+			game.i18n.format(
+				`${LANGUAGE_PREFIX}.notifications.requestCancelledByUser`,
+				{ tokenName: data.tokenName },
+			),
+		);
+	},
+
+	handleUpdatePendingRequests(updates) {
+		for (const [tokenId, request] of Object.entries(updates)) {
+			if (request === null) {
+				delete this._pendingRequests[tokenId];
+			} else {
+				this._pendingRequests[tokenId] = request;
+			}
+		}
+		// Update UI if necessary
+		this.updatePendingRequestIcon();
+	},
+
+	updatePendingRequestIcon() {
+		const hasPendingRequest = Object.values(this._pendingRequests).some(
+			(request) => request.userId === game.user.id,
+		);
+		if (hasPendingRequest) {
+			this.showPendingRequestIcon();
+		} else {
+			this.hidePendingRequestIcon();
+		}
+	},
 };
 
 Hooks.once("init", () => {
 	MovementApproval.initialize();
+});
+
+Hooks.once("setup", () => {
+	MovementApproval.registerSettings();
 });
 
 Hooks.on("getSceneControlButtons", (controls) => {
@@ -308,7 +489,7 @@ Hooks.on("getSceneControlButtons", (controls) => {
 			title: game.i18n.localize(
 				`${LANGUAGE_PREFIX}.controls.lockMovement.name`,
 			),
-			icon: `fas ${MovementApproval.enabled ? ICON_STATES.ENABLED : ICON_STATES.DISABLED}`,
+			icon: `fas ${MovementApproval.getEnabled() ? ICON_STATES.ENABLED : ICON_STATES.DISABLED}`,
 			button: true,
 			visible: game.user.isGM,
 			onClick: () => MovementApproval.handleLockMovementToggle(),

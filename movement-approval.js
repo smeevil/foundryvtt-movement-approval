@@ -6,21 +6,27 @@ const ICON_STATES = {
 	DISABLED: "fa-person-walking",
 };
 
-// Add these constants at the top of the file
 const PENDING_REQUEST_ICON = "fa-hourglass-half";
 const PENDING_REQUEST_TOOL_NAME = "pendingMovementRequest";
 
 const MovementApproval = {
 	ID: MODULE_ID,
 	lastWarningTime: 0,
-	_pendingRequests: {}, // New local variable to store pending requests
+	_pendingRequests: {},
+	_staticPaths: {},
 
+	/**
+	 * Initialize the module by patching core methods and setting up listeners.
+	 */
 	initialize() {
 		this.patchRulerMovement();
 		this.patchTokenDragging();
 		this.registerSocketListeners();
 	},
 
+	/**
+	 * Register the module settings.
+	 */
 	registerSettings() {
 		game.settings.register(this.ID, "enabled", {
 			name: "Enable Movement Approval",
@@ -29,12 +35,14 @@ const MovementApproval = {
 			config: false,
 			type: Boolean,
 			default: false,
-			onChange: (value) => {
-				this.updateControlsIcon(value);
-			},
+			onChange: this.updateControlsIcon.bind(this),
 		});
 	},
 
+	/**
+	 * Get the enabled state of the module.
+	 * @returns {boolean} Whether the module is enabled.
+	 */
 	getEnabled() {
 		try {
 			return game.settings.get(this.ID, "enabled");
@@ -46,39 +54,54 @@ const MovementApproval = {
 		}
 	},
 
+	/**
+	 * Set the enabled state of the module.
+	 * @param {boolean} value - The new enabled state.
+	 */
 	setEnabled(value) {
 		if (game.user.isGM) {
 			game.settings.set(this.ID, "enabled", value);
 		}
 	},
 
-	getPendingRequests() {
-		return this._pendingRequests;
+	/**
+	 * Emit a socket event.
+	 * @param {string} type - The type of the event.
+	 * @param {Object} payload - The payload of the event.
+	 */
+	emitSocket(type, payload) {
+		game.socket.emit(`module.${this.ID}`, { type, payload });
 	},
 
+	/**
+	 * Set a pending request for a token.
+	 * @param {string} tokenId - The ID of the token.
+	 * @param {Object} request - The request data.
+	 */
 	setPendingRequest(tokenId, request) {
 		this._pendingRequests[tokenId] = request;
 		if (game.user.isGM) {
-			game.socket.emit(`module.${this.ID}`, {
-				type: "updatePendingRequests",
-				payload: { [tokenId]: request },
-			});
+			this.emitSocket("updatePendingRequests", { [tokenId]: request });
 		}
 	},
 
+	/**
+	 * Remove a pending request for a token.
+	 * @param {string} tokenId - The ID of the token.
+	 */
 	removePendingRequest(tokenId) {
 		if (this._pendingRequests[tokenId]?.dialog) {
 			this._pendingRequests[tokenId].dialog.close();
 		}
 		delete this._pendingRequests[tokenId];
 		if (game.user.isGM) {
-			game.socket.emit(`module.${this.ID}`, {
-				type: "updatePendingRequests",
-				payload: { [tokenId]: null },
-			});
+			this.emitSocket("updatePendingRequests", { [tokenId]: null });
 		}
 	},
 
+	/**
+	 * Patch the Ruler.moveToken method to implement movement approval.
+	 */
 	patchRulerMovement() {
 		const originalMoveToken = Ruler.prototype.moveToken;
 		Ruler.prototype.moveToken = async function () {
@@ -89,8 +112,7 @@ const MovementApproval = {
 			const token = this.token;
 			if (!token) return false;
 
-			const pendingRequests = MovementApproval.getPendingRequests();
-			if (pendingRequests[token.id]) {
+			if (MovementApproval._pendingRequests[token.id]) {
 				ui.notifications.warn(
 					game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.pendingRequest`),
 				);
@@ -103,53 +125,49 @@ const MovementApproval = {
 				sceneId: token.scene.id,
 				waypoints: this.waypoints,
 				destination: this.destination,
-				color: this.color, // Add the ruler's color to the pathData
+				color: this.color,
 				userId: game.user.id,
 			};
 
-			game.socket.emit(`module.${MovementApproval.ID}`, {
-				type: "requestMovement",
-				payload: pathData,
-			});
-
+			MovementApproval.emitSocket("requestMovement", pathData);
 			ui.notifications.info(
 				game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.requestSent`),
 			);
 
 			this.clear();
 			MovementApproval.drawStaticPath(pathData);
-
 			MovementApproval.showPendingRequestIcon();
 
 			return false;
 		};
 	},
 
+	/**
+	 * Patch Token dragging methods to prevent movement when the module is enabled.
+	 */
 	patchTokenDragging() {
-		const originalOnDragLeftStart = Token.prototype._onDragLeftStart;
-		const originalOnDragLeftMove = Token.prototype._onDragLeftMove;
-
-		Token.prototype._onDragLeftStart = function (event) {
+		const checkMovementLock = function (event) {
 			if (!game.user.isGM && MovementApproval.getEnabled()) {
 				MovementApproval.showMovementLockedWarning();
 				return false;
 			}
-			return originalOnDragLeftStart.call(this, event);
+			return this.call(this, event);
 		};
 
-		Token.prototype._onDragLeftMove = function (event) {
-			if (!game.user.isGM && MovementApproval.getEnabled()) {
-				MovementApproval.showMovementLockedWarning();
-				return false;
-			}
-			return originalOnDragLeftMove.call(this, event);
-		};
+		Token.prototype._onDragLeftStart = checkMovementLock.bind(
+			Token.prototype._onDragLeftStart,
+		);
+		Token.prototype._onDragLeftMove = checkMovementLock.bind(
+			Token.prototype._onDragLeftMove,
+		);
 	},
 
+	/**
+	 * Show a warning when movement is locked.
+	 */
 	showMovementLockedWarning() {
 		const now = Date.now();
 		if (now - this.lastWarningTime > 5000) {
-			// prevent spamming, only show every 5 seconds
 			ui.notifications.warn(
 				game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.movementLocked`),
 			);
@@ -157,22 +175,30 @@ const MovementApproval = {
 		}
 	},
 
+	/**
+	 * Register socket listeners for various events.
+	 */
 	registerSocketListeners() {
-		game.socket.on(`module.${MovementApproval.ID}`, (data) => {
-			if (data.type === "requestMovement" && game.user.isGM) {
-				this.handleMovementRequest(data.payload);
-			} else if (data.type === "movementApproved" && !game.user.isGM) {
-				void this.handleMovementApproved(data.payload);
-			} else if (data.type === "movementDenied" && !game.user.isGM) {
-				void this.handleMovementDenied(data.payload);
-			} else if (data.type === "cancelMovementRequest" && game.user.isGM) {
-				this.handleCancelMovementRequest(data.payload);
-			} else if (data.type === "updatePendingRequests" && !game.user.isGM) {
-				this.handleUpdatePendingRequests(data.payload);
+		game.socket.on(`module.${this.ID}`, (data) => {
+			const handlers = {
+				requestMovement: this.handleMovementRequest,
+				movementApproved: this.handleMovementApproved,
+				movementDenied: this.handleMovementDenied,
+				cancelMovementRequest: this.handleCancelMovementRequest,
+				updatePendingRequests: this.handleUpdatePendingRequests,
+			};
+
+			const handler = handlers[data.type];
+			if (handler) {
+				handler.call(this, data.payload);
 			}
 		});
 	},
 
+	/**
+	 * Handle a movement request from a player.
+	 * @param {Object} data - The movement request data.
+	 */
 	handleMovementRequest(data) {
 		this.setPendingRequest(data.tokenId, data);
 		const scene = game.scenes.get(data.sceneId);
@@ -201,44 +227,51 @@ const MovementApproval = {
 		}).render(true);
 	},
 
+	/**
+	 * Handle the GM's response to a movement request.
+	 * @param {string} type - The type of response (approved or denied).
+	 * @param {Object} data - The movement request data.
+	 */
+	handleMovementResponse(type, data) {
+		this.clearStaticPath(data.tokenId);
+		this.removePendingRequest(data.tokenId);
+		this.emitSocket(type, data);
+		this.clearAllRulers();
+	},
+
+	/**
+	 * Approve a movement request.
+	 * @param {Object} data - The movement request data.
+	 */
 	approveMovement(data) {
-		this.clearStaticPath(data.tokenId);
-		this.removePendingRequest(data.tokenId);
-		game.socket.emit(`module.${MovementApproval.ID}`, {
-			type: "movementApproved",
-			payload: data,
-		});
-		// Clear the ruler for all users
-		for (const ruler of canvas.controls.rulers.children) {
-			ruler.clear();
-		}
+		this.handleMovementResponse("movementApproved", data);
 	},
 
+	/**
+	 * Deny a movement request.
+	 * @param {Object} data - The movement request data.
+	 */
 	denyMovement(data) {
-		this.clearStaticPath(data.tokenId);
-		this.removePendingRequest(data.tokenId);
-		game.socket.emit(`module.${MovementApproval.ID}`, {
-			type: "movementDenied",
-			payload: data,
-		});
-		// Clear the ruler for all users
-		for (const ruler of canvas.controls.rulers.children) {
-			ruler.clear();
-		}
+		this.handleMovementResponse("movementDenied", data);
 	},
 
+	/**
+	 * Handle a denied movement request.
+	 * @param {Object} data - The movement request data.
+	 */
 	async handleMovementDenied(data) {
 		ui.notifications.warn(
 			game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.movementDenied`),
 		);
 		this.clearStaticPath(data.tokenId);
-		// Clear the ruler for all users
-		for (const ruler of canvas.controls.rulers.children) {
-			ruler.clear();
-		}
+		this.clearAllRulers();
 		this.hidePendingRequestIcon();
 	},
 
+	/**
+	 * Handle an approved movement request.
+	 * @param {Object} data - The movement request data.
+	 */
 	async handleMovementApproved(data) {
 		const scene = game.scenes.get(data.sceneId);
 		const token = scene.tokens.get(data.tokenId);
@@ -251,65 +284,88 @@ const MovementApproval = {
 		}
 		this.removePendingRequest(data.tokenId);
 		this.clearStaticPath(data.tokenId);
-		// Clear the ruler for all users
-		for (const ruler of canvas.controls.rulers.children) {
-			ruler.clear();
-		}
+		this.clearAllRulers();
 		this.hidePendingRequestIcon();
 	},
 
+	/**
+	 * Move a token along a path of waypoints.
+	 * @param {Token} token - The token to move.
+	 * @param {Array} waypoints - The waypoints of the path.
+	 * @param {Object} destination - The final destination.
+	 */
 	async moveTokenAlongPath(token, waypoints, destination) {
-		if (waypoints.length > 0) {
-			for (const waypoint of waypoints) {
-				await token.update({ x: waypoint.x - 50, y: waypoint.y - 50 });
-				await CanvasAnimation.getAnimation(token.object.animationName)?.promise;
-			}
+		const moveToken = async (x, y) => {
+			await token.update({ x: x - 50, y: y - 50 });
+			await CanvasAnimation.getAnimation(token.object.animationName)?.promise;
+		};
+
+		for (const waypoint of waypoints) {
+			await moveToken(waypoint.x, waypoint.y);
 		}
-		await token.update({ x: destination.x - 50, y: destination.y - 50 });
-		await CanvasAnimation.getAnimation(token.object.animationName)?.promise;
+		await moveToken(destination.x, destination.y);
 	},
 
+	/**
+	 * Draw a static path on the canvas.
+	 * @param {Object} pathData - The data for the path.
+	 */
 	drawStaticPath(pathData) {
 		const { tokenId, waypoints, destination, color } = pathData;
 		const graphics = new PIXI.Graphics();
 
-		// Draw the black outline
-		graphics.lineStyle(6, 0x000000, 0.5);
-		this._drawPath(graphics, waypoints, destination);
+		const drawLine = (width, lineColor, alpha) => {
+			graphics.lineStyle(width, lineColor, alpha);
+			this._drawPath(graphics, waypoints, destination);
+		};
 
-		// Draw the colored line on top
-		graphics.lineStyle(4, color, 0.7);
-		this._drawPath(graphics, waypoints, destination);
+		drawLine(6, 0x000000, 0.5); // Draw the black outline
+		drawLine(4, color, 0.7); // Draw the colored line on top
 
 		canvas.controls.addChild(graphics);
-		this._staticPaths = this._staticPaths || {};
 		this._staticPaths[tokenId] = graphics;
 	},
 
+	/**
+	 * Draw a path on a PIXI.Graphics object.
+	 * @param {PIXI.Graphics} graphics - The graphics object to draw on.
+	 * @param {Array} waypoints - The waypoints of the path.
+	 * @param {Object} destination - The final destination.
+	 */
 	_drawPath(graphics, waypoints, destination) {
 		graphics.moveTo(waypoints[0].x, waypoints[0].y);
-		for (let i = 1; i < waypoints.length; i++) {
-			graphics.lineTo(waypoints[i].x, waypoints[i].y);
+		for (const wp of waypoints.slice(1)) {
+			graphics.lineTo(wp.x, wp.y);
 		}
 		graphics.lineTo(destination.x, destination.y);
 	},
 
+	/**
+	 * Clear a static path from the canvas.
+	 * @param {string} tokenId - The ID of the token associated with the path.
+	 */
 	clearStaticPath(tokenId) {
-		if (this._staticPaths?.[tokenId]) {
+		if (this._staticPaths[tokenId]) {
 			canvas.controls.removeChild(this._staticPaths[tokenId]);
 			this._staticPaths[tokenId].destroy();
 			delete this._staticPaths[tokenId];
 		}
 	},
 
+	/**
+	 * Handle toggling the movement lock.
+	 */
 	handleLockMovementToggle() {
 		this.setEnabled(!this.getEnabled());
 		if (!this.getEnabled()) {
-			// Clear all pending requests when disabling
 			this._pendingRequests = {};
 		}
 	},
 
+	/**
+	 * Update the controls icon based on the module's enabled state.
+	 * @param {boolean} enabled - Whether the module is enabled.
+	 */
 	updateControlsIcon(enabled) {
 		const icon = enabled ? ICON_STATES.ENABLED : ICON_STATES.DISABLED;
 		const controls = ui.controls.controls.find((c) => c.name === "token");
@@ -322,13 +378,17 @@ const MovementApproval = {
 		}
 	},
 
-	showPendingRequestIcon() {
+	/**
+	 * Toggle the pending request icon in the controls.
+	 * @param {boolean} show - Whether to show or hide the icon.
+	 */
+	togglePendingRequestIcon(show) {
 		const controls = ui.controls.controls.find((c) => c.name === "token");
 		if (controls) {
-			const existingTool = controls.tools.find(
+			const existingToolIndex = controls.tools.findIndex(
 				(t) => t.name === PENDING_REQUEST_TOOL_NAME,
 			);
-			if (!existingTool) {
+			if (show && existingToolIndex === -1) {
 				controls.tools.push({
 					name: PENDING_REQUEST_TOOL_NAME,
 					title: game.i18n.localize(
@@ -339,24 +399,30 @@ const MovementApproval = {
 					visible: true,
 					onClick: () => this.showCancelRequestDialog(),
 				});
-				ui.controls.render();
+			} else if (!show && existingToolIndex !== -1) {
+				controls.tools.splice(existingToolIndex, 1);
 			}
+			ui.controls.render();
 		}
 	},
 
+	/**
+	 * Show the pending request icon.
+	 */
+	showPendingRequestIcon() {
+		this.togglePendingRequestIcon(true);
+	},
+
+	/**
+	 * Hide the pending request icon.
+	 */
 	hidePendingRequestIcon() {
-		const controls = ui.controls.controls.find((c) => c.name === "token");
-		if (controls) {
-			const index = controls.tools.findIndex(
-				(t) => t.name === PENDING_REQUEST_TOOL_NAME,
-			);
-			if (index !== -1) {
-				controls.tools.splice(index, 1);
-				ui.controls.render();
-			}
-		}
+		this.togglePendingRequestIcon(false);
 	},
 
+	/**
+	 * Show the dialog for canceling a movement request.
+	 */
 	showCancelRequestDialog() {
 		new Dialog({
 			title: game.i18n.localize(`${LANGUAGE_PREFIX}.cancelDialog.title`),
@@ -375,6 +441,9 @@ const MovementApproval = {
 		}).render(true);
 	},
 
+	/**
+	 * Cancel a pending movement request.
+	 */
 	cancelMovementRequest() {
 		const tokenId = Object.keys(this._pendingRequests).find(
 			(key) => this._pendingRequests[key].userId === game.user.id,
@@ -383,14 +452,15 @@ const MovementApproval = {
 		if (tokenId) {
 			const request = this._pendingRequests[tokenId];
 			if (request) {
-				const sceneId = request.sceneId;
+				const { sceneId } = request;
 				const scene = game.scenes.get(sceneId);
 				const token = scene.tokens.get(tokenId);
 				this.clearStaticPath(tokenId);
 				this.removePendingRequest(tokenId);
-				game.socket.emit(`module.${this.ID}`, {
-					type: "cancelMovementRequest",
-					payload: { tokenId, sceneId, tokenName: token.name },
+				this.emitSocket("cancelMovementRequest", {
+					tokenId,
+					sceneId,
+					tokenName: token.name,
 				});
 				this.hidePendingRequestIcon();
 				ui.notifications.info(
@@ -412,12 +482,14 @@ const MovementApproval = {
 		}
 	},
 
+	/**
+	 * Handle a canceled movement request.
+	 * @param {Object} data - The canceled request data.
+	 */
 	handleCancelMovementRequest(data) {
-		console.log("should cancel movement request", data);
 		this.clearStaticPath(data.tokenId);
 		this.removePendingRequest(data.tokenId);
 
-		// Find and close the specific dialog
 		const dialogToClose = Object.values(ui.windows).find(
 			(w) =>
 				w instanceof Dialog &&
@@ -425,18 +497,6 @@ const MovementApproval = {
 				w.data.tokenId === data.tokenId,
 		);
 
-		this.clearStaticPath(data.tokenId);
-		this.removePendingRequest(data.tokenId);
-		game.socket.emit(`module.${MovementApproval.ID}`, {
-			type: "movementDenied",
-			payload: data,
-		});
-
-		// Clear the ruler for all users
-		for (const ruler of canvas.controls.rulers.children) {
-			ruler.clear();
-		}
-		console.log("found", dialogToClose);
 		if (dialogToClose) {
 			dialogToClose.close();
 		}
@@ -444,11 +504,17 @@ const MovementApproval = {
 		ui.notifications.info(
 			game.i18n.format(
 				`${LANGUAGE_PREFIX}.notifications.requestCancelledByUser`,
-				{ tokenName: data.tokenName },
+				{
+					tokenName: data.tokenName,
+				},
 			),
 		);
 	},
 
+	/**
+	 * Handle updates to pending requests.
+	 * @param {Object} updates - The updates to apply.
+	 */
 	handleUpdatePendingRequests(updates) {
 		for (const [tokenId, request] of Object.entries(updates)) {
 			if (request === null) {
@@ -457,18 +523,25 @@ const MovementApproval = {
 				this._pendingRequests[tokenId] = request;
 			}
 		}
-		// Update UI if necessary
 		this.updatePendingRequestIcon();
 	},
 
+	/**
+	 * Update the pending request icon based on current requests.
+	 */
 	updatePendingRequestIcon() {
 		const hasPendingRequest = Object.values(this._pendingRequests).some(
 			(request) => request.userId === game.user.id,
 		);
-		if (hasPendingRequest) {
-			this.showPendingRequestIcon();
-		} else {
-			this.hidePendingRequestIcon();
+		this.togglePendingRequestIcon(hasPendingRequest);
+	},
+
+	/**
+	 * Clear all rulers from the canvas.
+	 */
+	clearAllRulers() {
+		for (const ruler of canvas.controls.rulers.children) {
+			ruler.clear();
 		}
 	},
 };
@@ -489,7 +562,11 @@ Hooks.on("getSceneControlButtons", (controls) => {
 			title: game.i18n.localize(
 				`${LANGUAGE_PREFIX}.controls.lockMovement.name`,
 			),
-			icon: `fas ${MovementApproval.getEnabled() ? ICON_STATES.ENABLED : ICON_STATES.DISABLED}`,
+			icon: `fas ${
+				MovementApproval.getEnabled()
+					? ICON_STATES.ENABLED
+					: ICON_STATES.DISABLED
+			}`,
 			button: true,
 			visible: game.user.isGM,
 			onClick: () => MovementApproval.handleLockMovementToggle(),

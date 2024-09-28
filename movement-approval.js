@@ -205,6 +205,7 @@ const MovementApproval = {
 				movementDenied: this.handleMovementDenied,
 				cancelMovementRequest: this.handleCancelMovementRequest,
 				updatePendingRequests: this.handleUpdatePendingRequests,
+				requestCleanup: this.handleCleanupRequest,
 			};
 
 			const handler = handlers[data.type];
@@ -257,6 +258,18 @@ const MovementApproval = {
 		this.removePendingRequest(data.tokenId);
 		this.emitSocket(type, data);
 		this.clearAllRulers();
+	},
+
+	/**
+	 * handle Cleanup Request
+	 */
+
+	handleCleanupRequest() {
+		this.clearAllRulers();
+		this._pendingRequests = {};
+		for (const path in this._staticPaths) {
+			this.clearStaticPath(path);
+		}
 	},
 
 	/**
@@ -365,6 +378,7 @@ const MovementApproval = {
 	 * @param {string} tokenId - The ID of the token associated with the path.
 	 */
 	clearStaticPath(tokenId) {
+		console.log("asked to clear static paths for", tokenId);
 		if (this._staticPaths[tokenId]) {
 			canvas.controls.removeChild(this._staticPaths[tokenId]);
 			this._staticPaths[tokenId].destroy();
@@ -376,11 +390,26 @@ const MovementApproval = {
 	 * Handle toggling the movement lock.
 	 */
 	handleLockMovementToggle() {
-		this.setEnabled(!this.getEnabled());
-		if (!this.getEnabled()) {
-			MovementApproval.clearStaticPath(token.id);
-			this._pendingRequests = {};
+		if (this.getEnabled() === true) {
+			//we are about to disable the module
+			// inform everyone else to clean up
+			this.emitSocket("requestCleanup", {});
+
+			// clean up our own stuff
+			this.handleCleanupRequest();
+
+			// close any open dialogs for this module
+			for (const window of Object.values(ui.windows)) {
+				if (
+					window instanceof Dialog &&
+					window.data.type === `${MODULE_ID}-dialog`
+				) {
+					window.close();
+				}
+			}
 		}
+
+		this.setEnabled(!this.getEnabled());
 	},
 
 	/**
@@ -389,11 +418,15 @@ const MovementApproval = {
 	 */
 	updateControlsIcon(enabled) {
 		const icon = enabled ? ICON_STATES.ENABLED : ICON_STATES.DISABLED;
+		const title = game.i18n.localize(
+			`${LANGUAGE_PREFIX}.controls.lockMovement.${enabled ? "enabled" : "disabled"}`,
+		);
 		const controls = ui.controls.controls.find((c) => c.name === "token");
 		if (controls) {
 			const tool = controls.tools.find((t) => t.name === "lockMovement");
 			if (tool) {
 				tool.icon = `fas ${icon}`;
+				tool.title = title;
 				ui.controls.render();
 			}
 		}
@@ -653,7 +686,7 @@ Hooks.on("getSceneControlButtons", (controls) => {
 		.tools.push({
 			name: "lockMovement",
 			title: game.i18n.localize(
-				`${LANGUAGE_PREFIX}.controls.lockMovement.name`,
+				`${LANGUAGE_PREFIX}.controls.lockMovement.${MovementApproval.getEnabled() ? "enabled" : "disabled"}`,
 			),
 			icon: `fas ${
 				MovementApproval.getEnabled()

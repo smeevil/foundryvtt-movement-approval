@@ -1,7 +1,7 @@
 {
 	"id": "movement-approval",
 	"title": "Movement Approval",
-	"description": "Requires DM approval for token movement beyond allowed distance.",
+	"description": "Allows the DM to lock player movement and approve movement requests.",
 	"version": "1.0.0",
 	"socket": true,
 	"compatibility": {
@@ -12,6 +12,7 @@
 		{
 			"name": "Gerard de Brieder",
 			"email": "smeevil@me.com",
+			"discord": "smeevil",
 			"url": "https://smeevil.com"
 		}
 	],
@@ -22,5 +23,9 @@
 			"name": "English",
 			"path": "languages/en.json"
 		}
-	]
+	],
+	"url": "https://github.com/smeevil/foundryvtt-movement-approval",
+	"manifest": "https://github.com/smeevil/foundryvtt-movement-approval/releases/latest/download/module.json",
+	"license": "https://github.com/smeevil/foundryvtt-movement-approval/releases/latests/download/LICENSE",
+	"bugs": "https://github.com/smeevil/foundryvtt-movement-approval/issues"
 }

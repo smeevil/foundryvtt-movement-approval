@@ -265,11 +265,13 @@ const MovementApproval = {
 	 */
 
 	handleCleanupRequest() {
-		this.clearAllRulers();
-		this._pendingRequests = {};
 		for (const path in this._staticPaths) {
 			this.clearStaticPath(path);
 		}
+		this.clearAllRulers();
+		this._pendingRequests = {};
+		this._staticPaths = {};
+		this.togglePendingRequestIcon(false);
 	},
 
 	/**

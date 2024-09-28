@@ -1,0 +1,12 @@
+{
+	"name": "movement-approval",
+	"module": "movment-approval.ts",
+	"type": "module",
+	"devDependencies": {
+		"@league-of-foundry-developers/foundry-vtt-types": "^9.280.1",
+		"typescript": "^5.0.0"
+	},
+	"dependencies": {
+		"@biomejs/biome": "^1.9.2"
+	}
+}

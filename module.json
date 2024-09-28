@@ -1,26 +1,26 @@
 {
-  "id": "movement-approvement",
-  "title": "Movement Approvement",
-  "description": "Requires DM approval for token movement beyond allowed distance.",
-  "version": "1.0.0",
-  "socket": true,
-  "compatibility": {
-    "minimum": "10",
-    "verified": "11"
-  },
-  "authors": [
-    {
-      "name": "Your Name",
-      "email": "your.email@example.com",
-      "url": "https://yourwebsite.com"
-    }
-  ],
-  "esmodules": ["movement-approval.js"],
-  "languages": [
-    {
-      "lang": "en",
-      "name": "English",
-      "path": "languages/en.json"
-    }
-  ]
+	"id": "movement-approval",
+	"title": "Movement Approval",
+	"description": "Requires DM approval for token movement beyond allowed distance.",
+	"version": "1.0.0",
+	"socket": true,
+	"compatibility": {
+		"minimum": "10",
+		"verified": "11"
+	},
+	"authors": [
+		{
+			"name": "Gerard de Brieder",
+			"email": "smeevil@me.com",
+			"url": "https://smeevil.com"
+		}
+	],
+	"esmodules": ["movement-approval.js"],
+	"languages": [
+		{
+			"lang": "en",
+			"name": "English",
+			"path": "languages/en.json"
+		}
+	]
 }

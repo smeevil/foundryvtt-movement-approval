@@ -117,14 +117,10 @@ jobs:
              ./module.zip                        \
             `# The files that will be included.` \
             module.json                          \
+            module.js                            \
             README.md                            \
             LICENSE                              \
-            templates                            \
-            scripts/                             \
-            styles/                              \
-            packs/                               \
-            language/                            \
-            lang/
+            languages/                           \
           # Don't forget to add a backslash at the end of the line for any
           # additional files or directories!
 

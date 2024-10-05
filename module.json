@@ -16,7 +16,7 @@
 			"url": "https://smeevil.com"
 		}
 	],
-	"esmodules": ["movement-approval.js"],
+	"esmodules": ["module.js"],
 	"languages": [
 		{
 			"lang": "en",

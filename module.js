@@ -9,7 +9,7 @@ const ICON_STATES = {
 const PENDING_REQUEST_ICON = "fa-person-walking-dashed-line-arrow-right";
 const PENDING_REQUEST_TOOL_NAME = "pendingMovementRequest";
 
-const MovementApproval = {
+const Module = {
 	ID: MODULE_ID,
 	lastWarningTime: 0,
 	_pendingRequests: {},
@@ -119,14 +119,14 @@ const MovementApproval = {
 	patchRulerMovement() {
 		const originalMoveToken = Ruler.prototype.moveToken;
 		Ruler.prototype.moveToken = async function () {
-			if (game.user.isGM || !MovementApproval.getEnabled()) {
+			if (game.user.isGM || !Module.getEnabled()) {
 				return originalMoveToken.call(this);
 			}
 
 			const token = this.token;
 			if (!token) return false;
 
-			if (MovementApproval._pendingRequests[token.id]) {
+			if (Module._pendingRequests[token.id]) {
 				ui.notifications.warn(
 					game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.pendingRequest`),
 				);
@@ -144,14 +144,14 @@ const MovementApproval = {
 				userId: game.user.id,
 			};
 
-			MovementApproval.emitSocket("requestMovement", pathData);
+			Module.emitSocket("requestMovement", pathData);
 			ui.notifications.info(
 				game.i18n.localize(`${LANGUAGE_PREFIX}.notifications.requestSent`),
 			);
 
 			this.clear();
-			MovementApproval.drawStaticPath(pathData);
-			MovementApproval.showPendingRequestIcon();
+			Module.drawStaticPath(pathData);
+			Module.showPendingRequestIcon();
 
 			return false;
 		};
@@ -165,16 +165,16 @@ const MovementApproval = {
 		const originalOnDragLeftMove = Token.prototype._onDragLeftMove;
 
 		Token.prototype._onDragLeftStart = function (event) {
-			if (!game.user.isGM && MovementApproval.getEnabled()) {
-				MovementApproval.showMovementLockedWarning();
+			if (!game.user.isGM && Module.getEnabled()) {
+				Module.showMovementLockedWarning();
 				return false;
 			}
 			return originalOnDragLeftStart.call(this, event);
 		};
 
 		Token.prototype._onDragLeftMove = function (event) {
-			if (!game.user.isGM && MovementApproval.getEnabled()) {
-				MovementApproval.showMovementLockedWarning();
+			if (!game.user.isGM && Module.getEnabled()) {
+				Module.showMovementLockedWarning();
 				return false;
 			}
 			return originalOnDragLeftMove.call(this, event);
@@ -666,19 +666,16 @@ const MovementApproval = {
 };
 
 Hooks.once("ready", () => {
-	MovementApproval.initialize();
+	Module.initialize();
 });
 
 Hooks.once("setup", () => {
-	MovementApproval.registerSettings();
+	Module.registerSettings();
 });
 
 Hooks.on("userConnected", (info) => {
 	if (!info.active) {
-		MovementApproval.handleClientDisconnection(
-			info._source.role,
-			info._source._id,
-		);
+		Module.handleClientDisconnection(info._source.role, info._source._id);
 	}
 });
 
@@ -688,15 +685,13 @@ Hooks.on("getSceneControlButtons", (controls) => {
 		.tools.push({
 			name: "lockMovement",
 			title: game.i18n.localize(
-				`${LANGUAGE_PREFIX}.controls.lockMovement.${MovementApproval.getEnabled() ? "enabled" : "disabled"}`,
+				`${LANGUAGE_PREFIX}.controls.lockMovement.${Module.getEnabled() ? "enabled" : "disabled"}`,
 			),
 			icon: `fas ${
-				MovementApproval.getEnabled()
-					? ICON_STATES.ENABLED
-					: ICON_STATES.DISABLED
+				Module.getEnabled() ? ICON_STATES.ENABLED : ICON_STATES.DISABLED
 			}`,
 			button: true,
 			visible: game.user.isGM,
-			onClick: () => MovementApproval.handleLockMovementToggle(),
+			onClick: () => Module.handleLockMovementToggle(),
 		});
 });

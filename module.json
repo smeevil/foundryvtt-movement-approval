@@ -2,7 +2,7 @@
   "id": "movement-approval",
   "title": "Movement Approval",
   "description": "Allows the DM to lock player movement and approve movement requests.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "socket": true,
   "compatibility": {
     "minimum": "10",

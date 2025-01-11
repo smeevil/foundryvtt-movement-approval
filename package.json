@@ -4,9 +4,9 @@
 	"type": "module",
 	"devDependencies": {
 		"@league-of-foundry-developers/foundry-vtt-types": "^9.280.1",
-		"typescript": "^5.0.0"
+		"typescript": "^5.7.3"
 	},
 	"dependencies": {
-		"@biomejs/biome": "^1.9.2"
+		"@biomejs/biome": "^1.9.4"
 	}
 }
